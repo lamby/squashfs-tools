@@ -129,6 +129,9 @@ unsigned int cache_bytes = 0, cache_size = 0, inode_count = 0;
 /* inode lookup table */
 squashfs_inode *inode_lookup_table = NULL;
 
+/* override all timestamps */
+time_t override_timestamps = -1;
+
 /* in memory directory data */
 #define I_COUNT_SIZE		128
 #define DIR_ENTRIES		32
@@ -2240,6 +2243,8 @@ restat:
 			pathname_reader(dir_ent), strerror(errno));
 		goto read_err;
 	}
+	if (override_timestamps != -1)
+		buf2.st_mtime = override_timestamps;
 
 	if(read_size != buf2.st_size) {
 		close(file);
@@ -3111,7 +3116,7 @@ void dir_scan(squashfs_inode *inode, char *pathname,
 		buf.st_mode = S_IRWXU | S_IRWXG | S_IRWXO | S_IFDIR;
 		buf.st_uid = getuid();
 		buf.st_gid = getgid();
-		buf.st_mtime = time(NULL);
+		buf.st_mtime = override_timestamps != -1 ? override_timestamps : time(NULL);
 		buf.st_dev = 0;
 		buf.st_ino = 0;
 		dir_ent->inode = lookup_inode2(&buf, PSEUDO_FILE_OTHER, 0);
@@ -3120,6 +3125,8 @@ void dir_scan(squashfs_inode *inode, char *pathname,
 			/* source directory has disappeared? */
 			BAD_ERROR("Cannot stat source directory %s because %s\n",
 				pathname, strerror(errno));
+		if(override_timestamps != -1)
+			buf.st_mtime = override_timestamps;
 		dir_ent->inode = lookup_inode(&buf);
 	}
 
@@ -3375,6 +3382,8 @@ struct dir_info *dir_scan1(char *filename, char *subpath,
 			free_dir_entry(dir_ent);
 			continue;
 		}
+		if(override_timestamps != -1)
+			buf.st_mtime = override_timestamps;
 
 		if((buf.st_mode & S_IFMT) != S_IFREG &&
 					(buf.st_mode & S_IFMT) != S_IFDIR &&
@@ -3554,7 +3563,7 @@ void dir_scan2(struct dir_info *dir, struct pseudo *pseudo)
 		buf.st_gid = pseudo_ent->dev->gid;
 		buf.st_rdev = makedev(pseudo_ent->dev->major,
 			pseudo_ent->dev->minor);
-		buf.st_mtime = time(NULL);
+		buf.st_mtime = override_timestamps != -1 ? override_timestamps : time(NULL);
 		buf.st_ino = pseudo_ino ++;
 
 		if(pseudo_ent->dev->type == 'd') {
@@ -5122,6 +5131,9 @@ int main(int argc, char *argv[])
 	int total_mem = get_default_phys_mem();
 	int progress = TRUE;
 	int force_progress = FALSE;
+	char *source_date_epoch, *endptr;
+	unsigned long long epoch;
+
 	struct file_buffer **fragment = NULL;
 
 	if(argc > 1 && strcmp(argv[1], "-version") == 0) {
@@ -5659,6 +5671,36 @@ printOptions:
 		}
 	}
 
+	/* if SOURCE_DATE_EPOCH is set, always use that timestamp */
+	source_date_epoch = getenv("SOURCE_DATE_EPOCH");
+	if(source_date_epoch) {
+		errno = 0;
+		epoch = strtoull(source_date_epoch, &endptr, 10);
+		if((errno == ERANGE && (epoch == ULLONG_MAX || epoch == 0))
+				|| (errno != 0 && epoch == 0)) {
+			ERROR("Environment variable $SOURCE_DATE_EPOCH: "
+				"strtoull: %s\n", strerror(errno));
+			EXIT_MKSQUASHFS();
+		}
+		if(endptr == source_date_epoch) {
+			ERROR("Environment variable $SOURCE_DATE_EPOCH: "
+				"No digits were found: %s\n", endptr);
+			EXIT_MKSQUASHFS();
+		}
+		if(*endptr != '\0') {
+			ERROR("Environment variable $SOURCE_DATE_EPOCH: "
+				"Trailing garbage: %s\n", endptr);
+			EXIT_MKSQUASHFS();
+		}
+		if(epoch > ULONG_MAX) {
+			ERROR("Environment variable $SOURCE_DATE_EPOCH: "
+				"value must be smaller than or equal to "
+				"%lu but was found to be: %llu \n", ULONG_MAX, epoch);
+			EXIT_MKSQUASHFS();
+		}
+		override_timestamps = (time_t)epoch;
+	}
+
 	/*
 	 * Some compressors may need the options to be checked for validity
 	 * once all the options have been processed
@@ -5994,7 +6036,7 @@ printOptions:
 	sBlk.flags = SQUASHFS_MKFLAGS(noI, noD, noF, noX, no_fragments,
 		always_use_fragments, duplicate_checking, exportable,
 		no_xattrs, comp_opts);
-	sBlk.mkfs_time = time(NULL);
+	sBlk.mkfs_time = override_timestamps != -1 ? override_timestamps : time(NULL);
 
 	disable_info();
 
