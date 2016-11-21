@@ -129,6 +129,9 @@ unsigned int cache_bytes = 0, cache_size = 0, inode_count = 0;
 /* inode lookup table */
 squashfs_inode *inode_lookup_table = NULL;
 
+/* clamp all timestamps to SOURCE_DATE_EPOCH */
+time_t content_clamp_time = -1;
+
 /* override filesystem creation time */
 time_t mkfs_fixed_time = -1;
 
@@ -2243,6 +2246,8 @@ restat:
 			pathname_reader(dir_ent), strerror(errno));
 		goto read_err;
 	}
+	if(content_clamp_time != -1 && buf2.st_mtime >= content_clamp_time)
+		buf2.st_mtime = content_clamp_time;
 
 	if(read_size != buf2.st_size) {
 		close(file);
@@ -3114,7 +3119,7 @@ void dir_scan(squashfs_inode *inode, char *pathname,
 		buf.st_mode = S_IRWXU | S_IRWXG | S_IRWXO | S_IFDIR;
 		buf.st_uid = getuid();
 		buf.st_gid = getgid();
-		buf.st_mtime = time(NULL);
+		buf.st_mtime = content_clamp_time != -1 ? content_clamp_time : time(NULL);
 		buf.st_dev = 0;
 		buf.st_ino = 0;
 		dir_ent->inode = lookup_inode2(&buf, PSEUDO_FILE_OTHER, 0);
@@ -3123,6 +3128,8 @@ void dir_scan(squashfs_inode *inode, char *pathname,
 			/* source directory has disappeared? */
 			BAD_ERROR("Cannot stat source directory %s because %s\n",
 				pathname, strerror(errno));
+		if(content_clamp_time != -1 && buf.st_mtime >= content_clamp_time)
+			buf.st_mtime = content_clamp_time;
 		dir_ent->inode = lookup_inode(&buf);
 	}
 
@@ -3378,6 +3385,8 @@ struct dir_info *dir_scan1(char *filename, char *subpath,
 			free_dir_entry(dir_ent);
 			continue;
 		}
+		if(content_clamp_time != -1 && buf.st_mtime >= content_clamp_time)
+			buf.st_mtime = content_clamp_time;
 
 		if((buf.st_mode & S_IFMT) != S_IFREG &&
 					(buf.st_mode & S_IFMT) != S_IFDIR &&
@@ -3557,7 +3566,7 @@ void dir_scan2(struct dir_info *dir, struct pseudo *pseudo)
 		buf.st_gid = pseudo_ent->dev->gid;
 		buf.st_rdev = makedev(pseudo_ent->dev->major,
 			pseudo_ent->dev->minor);
-		buf.st_mtime = time(NULL);
+		buf.st_mtime = content_clamp_time != -1 ? content_clamp_time : time(NULL);
 		buf.st_ino = pseudo_ino ++;
 
 		if(pseudo_ent->dev->type == 'd') {
@@ -5692,7 +5701,7 @@ printOptions:
 				"%lu but was found to be: %llu \n", ULONG_MAX, epoch);
 			EXIT_MKSQUASHFS();
 		}
-		mkfs_fixed_time = (time_t)epoch;
+		mkfs_fixed_time = content_clamp_time = (time_t)epoch;
 	}
 
 	/*
